@@ -1,9 +1,9 @@
-from flask import Flask, render_template, redirect, url_for, request,make_response
-from pymongo import MongoClient
-from bson.objectid import ObjectId
+from flask import Flask, render_template, redirect, url_for, request, make_response
+import mysql.connector
 import socket
 import os
 import json
+import time
 
 app = Flask(__name__)
 
@@ -11,9 +11,18 @@ TEXT1=os.environ.get('TEXT1', "Hackfest")
 TEXT2=os.environ.get('TEXT2', "Registration")
 ORGANIZER=os.environ.get('ORGANIZER', "UVCE")
 
-MONGODB_HOST=os.environ.get('MONGODB_HOST', 'localhost')
-client = MongoClient(MONGODB_HOST, 27017)
-db = client.rsvpdata
+time.sleep(2)
+db = mysql.connector.connect(user = "root", password = "hello",
+                              host = "db", database = "rsvp",
+                              auth_plugin='mysql_native_password')
+
+db_cursor = db.cursor()
+table = """CREATE TABLE IF NOT EXISTS entries (
+         id INT AUTO_INCREMENT PRIMARY KEY,
+         name VARCHAR(30) NOT NULL,
+         email VARCHAR(50) NOT NULL)"""
+db_cursor.execute(table)
+db_cursor.close()
 
 class RSVP(object):
     """Simple Model class for RSVP"""
@@ -34,27 +43,52 @@ class RSVP(object):
         }
 
     def delete(self):
-        db.rsvpdata.find_one_and_delete({"_id": self._id})
+        db_cursor = db.cursor()
+        db_cursor.execute("DELETE FROM entries WHERE id=" + str(self._id))
+        db_cursor.close()
 
     @staticmethod
     def find_all():
-        return [RSVP(**doc) for doc in db.rsvpdata.find()]
+        db_cursor = db.cursor()
+        db_cursor.execute("SELECT * FROM entries")
+        _items = db_cursor.fetchall()
+        items = []
+        for item in _items:
+            items.append(RSVP(item[1], item[2], item[0]))
+        db_cursor.close()
+        return items
 
     @staticmethod
     def find_one(id):
-        doc = db.rsvpdata.find_one({"_id": ObjectId(id)})
-        return doc and RSVP(doc['name'], doc['email'], doc['_id'])
+        db_cursor = db.cursor()
+        db_cursor.execute("SELECT * FROM entries WHERE id=" + id)
+        _items = db_cursor.fetchall()
+        items = []
+        for item in _items:
+            items.append(RSVP(item[1], item[2], item[0]))
+        db_cursor.close()
+        if len(items) > 0:
+            return items[0]
+        else:
+            return None
 
     @staticmethod
     def new(name, email):
-        doc = {"name": name, "email": email}
-        result = db.rsvpdata.insert_one(doc)
-        return RSVP(name, email, result.inserted_id)
+        db_cursor = db.cursor()
+        db_cursor.execute("INSERT INTO entries (name, email) VALUES (%s, %s)", (request.form['name'], request.form['email']))
+        inserted_id = db_cursor.lastrowid
+        db_cursor.close()
+        return RSVP(name, email, inserted_id)
 
 @app.route('/')
 def rsvp():
-    _items = db.rsvpdata.find()
-    items = [item for item in _items]
+    db_cursor = db.cursor()
+    db_cursor.execute("SELECT * FROM entries")
+    _items = db_cursor.fetchall()
+    items = []
+    for item in _items:
+        items.append({"name": item[1], "email": item[2]})
+    db_cursor.close()
     count = len(items)
     hostname = socket.gethostname()
     return render_template('profile.html', counter=count, hostname=hostname,\
@@ -62,8 +96,9 @@ def rsvp():
 
 @app.route('/new', methods=['POST'])
 def new():
-    item_doc = {'name': request.form['name'], 'email': request.form['email']}
-    db.rsvpdata.insert_one(item_doc)
+    db_cursor = db.cursor()
+    db_cursor.execute("INSERT INTO entries (name, email) VALUES (%s, %s)", (request.form['name'], request.form['email']))
+    db_cursor.close()
     return redirect(url_for('rsvp'))
 
 @app.route('/api/rsvps', methods=['GET', 'POST'])
